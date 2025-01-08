@@ -33,7 +33,7 @@ LOG_MODULE_REGISTER(test_lcd, LOG_LEVEL_INF);
 
 #define TEST_MODEL_CNT_CB(_dummy_op, _metadata) \
 {                                               \
-	.id = 0x1234,                               \
+	.id = TEST_MOD_ID,                               \
 	BT_MESH_MODEL_RUNTIME_INIT(NULL)		    \
 	.pub = NULL,                                \
 	.keys = NULL,                               \
@@ -51,9 +51,11 @@ const struct bt_mesh_model_op dummy_op[] = {
 	BT_MESH_MODEL_OP_END,
 };
 
+#define NUM_RECORDS 40
+
 static const uint8_t elem_offset2[3] = {4, 5, 6};
 static const uint8_t additional_data[2] = {100, 200}; /* A Mesh Profile may have additional data. */
-static const struct bt_mesh_comp2_record comp_rec[40] = {
+static const struct bt_mesh_comp2_record comp_rec[NUM_RECORDS] = {
 	[0 ... 39] = {.id = 10,
 		      .version.x = 20,
 		      .version.y = 30,
@@ -106,7 +108,10 @@ static struct bt_mesh_prov prov;
 static struct bt_mesh_cfg_cli cfg_cli;
 static struct bt_mesh_large_comp_data_cli lcd_cli;
 
-/* Creates enough composition data to send a max SDU comp status message + 1 byte */
+#define NUM_DUMMY_ELEMS_1 88
+#define NUM_DUMMY_ELEMS_2 186
+
+/* Creates enough data in CDP0 for the SDU comp status message to be split into two segments. */
 static const struct bt_mesh_elem elements_1[] = {
 	BT_MESH_ELEM(1,
 		     MODEL_LIST(BT_MESH_MODEL_CFG_SRV,
@@ -114,10 +119,12 @@ static const struct bt_mesh_elem elements_1[] = {
 				BT_MESH_MODEL_LARGE_COMP_DATA_CLI(&lcd_cli),
 				BT_MESH_MODEL_LARGE_COMP_DATA_SRV),
 		     BT_MESH_MODEL_NONE),
-	LISTIFY(88, DUMMY_ELEM, (,)),
+	LISTIFY(NUM_DUMMY_ELEMS_1, DUMMY_ELEM, (,)),
 };
 
-/* Creates enough metadata to send a max SDU metadata status message + 1 byte */
+/* Creates enough data for models metadata and CDP1 for the SDU metadata status message to be split
+ * into two segments.
+ */
 static const struct bt_mesh_elem elements_2[] = {
 	BT_MESH_ELEM(1,
 		     MODEL_LIST(BT_MESH_MODEL_CFG_SRV,
@@ -125,13 +132,13 @@ static const struct bt_mesh_elem elements_2[] = {
 				BT_MESH_MODEL_LARGE_COMP_DATA_CLI(&lcd_cli),
 				BT_MESH_MODEL_LARGE_COMP_DATA_SRV),
 		     BT_MESH_MODEL_NONE),
-	LISTIFY(186, DUMMY_ELEM, (,)),
+	LISTIFY(NUM_DUMMY_ELEMS_2, DUMMY_ELEM, (,)),
 };
 
 static const struct bt_mesh_comp comp_1 = {
 	.cid = TEST_VND_COMPANY_ID,
-	.vid = 0xabba,
 	.pid = 0xdead,
+	.vid = 0xabba,
 	.elem = elements_1,
 	.elem_count = ARRAY_SIZE(elements_1),
 };
@@ -141,6 +148,103 @@ static const struct bt_mesh_comp comp_2 = {
 	.elem = elements_2,
 	.elem_count = ARRAY_SIZE(elements_2),
 };
+
+static void generate_cdp0(struct net_buf_simple *buf, int comp, uint16_t offset)
+{
+	uint16_t feat = 0U;
+	if (IS_ENABLED(CONFIG_BT_MESH_RELAY)) {
+		feat |= BT_MESH_FEAT_RELAY;
+	}
+	if (IS_ENABLED(CONFIG_BT_MESH_GATT_PROXY)) {
+		feat |= BT_MESH_FEAT_PROXY;
+	}
+	if (IS_ENABLED(CONFIG_BT_MESH_FRIEND)) {
+		feat |= BT_MESH_FEAT_FRIEND;
+	}
+	if (IS_ENABLED(CONFIG_BT_MESH_LOW_POWER)) {
+		feat |= BT_MESH_FEAT_LOW_POWER;
+	}
+
+	net_buf_simple_add_le16(buf, TEST_VND_COMPANY_ID); /* CID */
+	net_buf_simple_add_le16(buf, 0xdead); /* PID */
+	net_buf_simple_add_le16(buf, 0xabba); /* VID */
+	net_buf_simple_add_le16(buf, CONFIG_BT_MESH_CRPL); /* CRPL */
+	net_buf_simple_add_le16(buf, feat); /* Features */
+
+	/* Element */
+	net_buf_simple_add_le16(buf, 1); /* Loc */
+	net_buf_simple_add_u8(buf, 4); /* NumS */
+	net_buf_simple_add_u8(buf, 0); /* NumV */
+	net_buf_simple_add_le16(buf, BT_MESH_MODEL_ID_CFG_SRV);
+	net_buf_simple_add_le16(buf, BT_MESH_MODEL_ID_CFG_CLI);
+	net_buf_simple_add_le16(buf, BT_MESH_MODEL_ID_LARGE_COMP_DATA_CLI);
+	net_buf_simple_add_le16(buf, BT_MESH_MODEL_ID_LARGE_COMP_DATA_SRV);
+
+
+	/* Dummy Elements */
+	for (int i = 0; i < ((comp == 1) ? NUM_DUMMY_ELEMS_1 : NUM_DUMMY_ELEMS_2); i++) {
+		net_buf_simple_add_le16(buf, i + 2); /* Loc */
+		net_buf_simple_add_u8(buf, 1); /* NumS */
+		net_buf_simple_add_u8(buf, 0); /* NumV */
+		net_buf_simple_add_le16(buf, TEST_MOD_ID);
+	}
+
+	net_buf_simple_pull_mem(buf, offset);
+}
+
+static void generate_cdp1(struct net_buf_simple *buf, int comp, uint16_t offset)
+{
+	/* Element */
+	net_buf_simple_add_u8(buf, 4); /* Number_S */
+	net_buf_simple_add_u8(buf, 0); /* Number_V */
+
+	net_buf_simple_add_u8(buf, 0); /* Model Item (CFG Srv) */
+	net_buf_simple_add_u8(buf, 0); /* Model Item (CFG Cli) */
+	net_buf_simple_add_u8(buf, 0); /* Model Item (LCD Cli) */
+	net_buf_simple_add_u8(buf, 4); /* Model Item (LCD Srv) */
+	net_buf_simple_add_u8(buf, 0); /* Extended Model Item (LCD Srv extends CFG Srv) */
+
+	/* Dummy Elements */
+	for (int i = 0; i < ((comp == 1) ? NUM_DUMMY_ELEMS_1 : NUM_DUMMY_ELEMS_2); i++) {
+		net_buf_simple_add_u8(buf, 1); /* Number_S */
+		net_buf_simple_add_u8(buf, 0); /* Number_V */
+
+		net_buf_simple_add_u8(buf, 0); /* Model Item */
+	}
+
+	net_buf_simple_pull_mem(buf, offset);
+}
+
+static void generate_cdp2(struct net_buf_simple *buf, int comp, uint16_t offset)
+{
+	for (int i = 0; i < NUM_RECORDS; i++) {
+		net_buf_simple_add_le16(buf, 10);                 /* Mesh Profile Identifier */
+		net_buf_simple_add_u8(buf, 20);                   /* Version X */
+		net_buf_simple_add_u8(buf, 30);                   /* Version Y */
+		net_buf_simple_add_u8(buf, 40);                   /* Version Z */
+		net_buf_simple_add_u8(buf, sizeof(elem_offset2)); /* Num Element Offsets */
+		net_buf_simple_add_mem(buf, elem_offset2, sizeof(elem_offset2));
+		net_buf_simple_add_le16(buf, sizeof(additional_data)); /* Additional Data Len */
+		net_buf_simple_add_mem(buf, additional_data, sizeof(additional_data));
+	}
+	net_buf_simple_pull_mem(buf, offset);
+}
+
+static void comp_data_get_page(struct net_buf_simple *buf, int page, int comp, uint16_t offset) {
+	switch (page) {
+	case 0:
+		generate_cdp0(buf, comp, offset);
+		break;
+	case 1:
+		generate_cdp1(buf, comp, offset);
+		break;
+	case 2:
+		generate_cdp2(buf, comp, offset);
+		break;
+	default:
+		FAIL("Invalid page number: %d", page);
+	}
+}
 
 static void prov_and_conf(struct bt_mesh_test_cfg cfg)
 {
@@ -156,12 +260,12 @@ static void prov_and_conf(struct bt_mesh_test_cfg cfg)
 /* Since nodes self-provision in this test and the LCD model uses device keys for crypto, the
  * server node must be added to the client CDB manually.
  */
-static void target_node_alloc(struct bt_mesh_comp comp, struct bt_mesh_test_cfg cfg)
+static void target_node_alloc(const struct bt_mesh_comp *comp, struct bt_mesh_test_cfg cfg)
 {
 	struct bt_mesh_cdb_node *node;
 	int err;
 
-	node = bt_mesh_cdb_node_alloc(test_va_uuid, cfg.addr, comp.elem_count, 0);
+	node = bt_mesh_cdb_node_alloc(test_va_uuid, cfg.addr, comp->elem_count, 0);
 	ASSERT_TRUE(node);
 
 	err = bt_mesh_cdb_node_key_import(node, cfg.dev_key);
@@ -232,11 +336,10 @@ static void test_cli_init(void)
 
 static void test_cli_max_sdu_comp_data_request(void)
 {
-	int err;
 	uint8_t page = 0;
 	uint16_t offset, total_size;
 
-	NET_BUF_SIMPLE_DEFINE(local_comp, 500);
+	NET_BUF_SIMPLE_DEFINE(local_comp, 550);
 	NET_BUF_SIMPLE_DEFINE(srv_rsp_comp, 500);
 	net_buf_simple_init(&local_comp, 0);
 	net_buf_simple_init(&srv_rsp_comp, 0);
@@ -247,7 +350,7 @@ static void test_cli_max_sdu_comp_data_request(void)
 
 	bt_mesh_device_setup(&prov, &comp_1);
 	prov_and_conf(cli_cfg);
-	target_node_alloc(comp_1, srv_cfg);
+	target_node_alloc(&comp_1, srv_cfg);
 
 	/* Note: an offset of 3 is necessary with the status data to be exactly
 	 * 380 bytes of access payload.
@@ -255,11 +358,7 @@ static void test_cli_max_sdu_comp_data_request(void)
 	offset = 3;
 
 	/* Get local data */
-	err = bt_mesh_comp_data_get_page(&local_comp, 0, offset);
-	/* Operation is successful even if all data cannot fit in the buffer (-E2BIG) */
-	if (err) {
-		FAIL("CLIENT: Failed to get comp data Page 0: %d", err);
-	}
+	comp_data_get_page(&local_comp, page, 1, offset);
 	total_size = bt_mesh_comp_page_size(0);
 
 	/* Get server composition data and check integrity */
@@ -273,7 +372,6 @@ static void test_cli_max_sdu_comp_data_request(void)
 
 static void test_cli_split_comp_data_request(void)
 {
-	int err;
 	uint16_t offset = 0, prev_len = 0;
 
 	NET_BUF_SIMPLE_DEFINE(local_comp, CONFIG_BT_MESH_COMP_PST_BUF_SIZE);
@@ -293,14 +391,10 @@ static void test_cli_split_comp_data_request(void)
 	bt_mesh_device_setup(&prov, (comp_page == 0 || comp_page == 128) ? &comp_1 : &comp_2);
 	bt_mesh_comp2_register(&comp_p2);
 	prov_and_conf(cli_cfg);
-	target_node_alloc((comp_page == 0 || comp_page == 128) ? comp_1 : comp_2, srv_cfg);
+	target_node_alloc((comp_page == 0 || comp_page == 128) ? &comp_1 : &comp_2, srv_cfg);
 
 	/* Get local data */
-	err = bt_mesh_comp_data_get_page(&local_comp, comp_page, 0);
-	/* Operation is successful even if all data cannot fit in the buffer (-E2BIG) */
-	if (err && err != -E2BIG) {
-		FAIL("CLIENT: Failed to get comp data Page %d: %d", err, comp_page);
-	}
+	comp_data_get_page(&local_comp, comp_page, (comp_page == 0 || comp_page == 128) ? 1 : 2, offset); // TODO remove magic number, i. e. enum or bool between comp_1/2
 
 	uint16_t total_size = bt_mesh_comp_page_size(comp_page);
 
@@ -346,7 +440,7 @@ static void test_cli_max_sdu_metadata_request(void)
 
 	bt_mesh_device_setup(&prov, &comp_2);
 	prov_and_conf(cli_cfg);
-	target_node_alloc(comp_2, srv_cfg);
+	target_node_alloc(&comp_2, srv_cfg);
 
 	/* Note: an offset of 4 is necessary for the status data to be exactly
 	 * 380 bytes of access payload.
@@ -391,7 +485,7 @@ static void test_cli_split_metadata_request(void)
 
 	bt_mesh_device_setup(&prov, &comp_2);
 	prov_and_conf(cli_cfg);
-	target_node_alloc(comp_2, srv_cfg);
+	target_node_alloc(&comp_2, srv_cfg);
 
 	offset = 0;
 
@@ -433,6 +527,9 @@ static void test_srv_comp_data_status_respond(void)
 		/*bt_mesh_comp_change_prepare();
 		atomic_set_bit(bt_mesh.flags, BT_MESH_NEW_COMP);*/
 		/* TODO: Do something here */
+		// bt_mesh_comp_data_set(128...);
+		// bt_mesh_comp_data_set(129...);
+		// bt_mesh_comp_data_set(130...);
 	}
 
 	/* No server callback available. Wait 10 sec for message to be recived */
