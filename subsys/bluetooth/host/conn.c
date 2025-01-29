@@ -57,7 +57,7 @@ static struct k_work_q conn_tx_workq;
 static K_KERNEL_STACK_DEFINE(conn_tx_workq_thread_stack, CONFIG_BT_CONN_TX_NOTIFY_WQ_STACK_SIZE);
 #endif /* CONFIG_BT_CONN_TX_NOTIFY_WQ */
 
-static void tx_free(struct bt_conn_tx *tx);
+static void tx_free(struct bt_conn_tx *tx, enum bt_conn_type type);
 
 static void conn_tx_destroy(struct bt_conn *conn, struct bt_conn_tx *tx)
 {
@@ -71,7 +71,7 @@ static void conn_tx_destroy(struct bt_conn *conn, struct bt_conn_tx *tx)
 	/* Free up TX metadata before calling callback in case the callback
 	 * tries to allocate metadata
 	 */
-	tx_free(tx);
+	tx_free(tx, conn->type);
 
 	if (cb) {
 		cb(conn, user_data, -ESHUTDOWN);
@@ -184,10 +184,14 @@ extern struct bt_conn iso_conns[CONFIG_BT_ISO_MAX_CHAN];
 /* Callback TX buffers for ISO */
 static struct bt_conn_tx iso_tx[CONFIG_BT_ISO_TX_BUF_COUNT];
 
+K_FIFO_DEFINE(free_iso_tx);
+
 int bt_conn_iso_init(void)
 {
+	k_fifo_init(&free_iso_tx);
+
 	for (size_t i = 0; i < ARRAY_SIZE(iso_tx); i++) {
-		k_fifo_put(&free_tx, &iso_tx[i]);
+		k_fifo_put(&free_iso_tx, &iso_tx[i]);
 	}
 
 	return 0;
@@ -250,12 +254,21 @@ static inline const char *state2str(bt_conn_state_t state)
 	}
 }
 
-static void tx_free(struct bt_conn_tx *tx)
+static void tx_free(struct bt_conn_tx *tx, enum bt_conn_type type)
 {
 	LOG_DBG("%p", tx);
 	tx->cb = NULL;
 	tx->user_data = NULL;
-	k_fifo_put(&free_tx, tx);
+
+	switch (type) {
+#if defined(CONFIG_BT_ISO)
+	case BT_CONN_TYPE_ISO:
+		k_fifo_put(&free_iso_tx, tx);
+		break;
+#endif
+	default:
+		k_fifo_put(&free_tx, tx);
+	}
 }
 
 #if defined(CONFIG_BT_CONN_TX)
@@ -300,7 +313,7 @@ static void tx_notify_process(struct bt_conn *conn)
 		user_data = tx->user_data;
 
 		/* Free up TX notify since there may be user waiting */
-		tx_free(tx);
+		tx_free(tx, conn->type);
 
 		/* Run the callback, at this point it should be safe to
 		 * allocate new buffers since the TX should have been
@@ -500,12 +513,29 @@ void bt_conn_recv(struct bt_conn *conn, struct net_buf *buf, uint8_t flags)
 
 static bool dont_have_tx_context(struct bt_conn *conn)
 {
-	return k_fifo_is_empty(&free_tx);
+	switch (conn->type) {
+#if defined(CONFIG_BT_ISO)
+	case BT_CONN_TYPE_ISO:
+		return k_fifo_is_empty(&free_iso_tx);
+#endif
+	default:
+		return k_fifo_is_empty(&free_tx);
+	}
 }
 
-static struct bt_conn_tx *conn_tx_alloc(void)
+static struct bt_conn_tx *conn_tx_alloc(enum bt_conn_type type)
 {
-	struct bt_conn_tx *ret = k_fifo_get(&free_tx, K_NO_WAIT);
+	struct bt_conn_tx *ret;
+
+	switch (type) {
+#if defined(CONFIG_BT_ISO)
+	case BT_CONN_TYPE_ISO:
+		ret = k_fifo_get(&free_iso_tx, K_NO_WAIT);
+		break;
+#endif
+	default:
+		ret = k_fifo_get(&free_tx, K_NO_WAIT);
+	}
 
 	LOG_DBG("%p", ret);
 
@@ -681,7 +711,7 @@ static int send_buf(struct bt_conn *conn, struct net_buf *buf,
 	}
 
 	/* Allocate and set the TX context */
-	tx = conn_tx_alloc();
+	tx = conn_tx_alloc(conn->type);
 
 	/* See big comment above */
 	if (!tx) {
