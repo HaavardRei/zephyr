@@ -657,6 +657,7 @@ static bt_mesh_prov_bearer_t active_bearers;
 
 static void prov_link_closed(enum prov_bearer_link_status status)
 {
+	LOG_ERR("Link closed");
 	if (IS_ENABLED(CONFIG_BT_MESH_RPR_SRV) &&
 	    atomic_test_bit(bt_mesh_prov_link.flags, REPROVISION)) {
 		if (atomic_test_bit(bt_mesh_prov_link.flags, COMPLETE) &&
@@ -677,6 +678,7 @@ static void prov_link_closed(enum prov_bearer_link_status status)
 	 */
 	if (IS_ENABLED(CONFIG_BT_MESH_RPR_SRV) && !is_pb_remote() &&
 	    (active_bearers & BT_MESH_PROV_REMOTE)) {
+		LOG_ERR("Re-enabling pb_remote");
 		pb_remote_srv.link_accept(bt_mesh_prov_bearer_cb_get(), NULL);
 	}
 
@@ -686,17 +688,20 @@ static void prov_link_closed(enum prov_bearer_link_status status)
 
 	if (IS_ENABLED(CONFIG_BT_MESH_PB_GATT) && !is_pb_gatt() &&
 	    (active_bearers & BT_MESH_PROV_GATT)) {
+		LOG_ERR("Re-enabling pb_gatt");
 		bt_mesh_pb_gatt.link_accept(bt_mesh_prov_bearer_cb_get(), NULL);
 	}
 
 	if (IS_ENABLED(CONFIG_BT_MESH_PB_ADV) && !is_pb_adv() &&
 	    (active_bearers & BT_MESH_PROV_ADV)) {
+		LOG_ERR("Re-enabling pb_adv");
 		bt_mesh_pb_adv.link_accept(bt_mesh_prov_bearer_cb_get(), NULL);
 	}
 }
 
 static void prov_link_opened(void)
 {
+	LOG_ERR("Link opened");
 	bt_mesh_prov_link.expect = PROV_INVITE;
 	if (IS_ENABLED(CONFIG_BT_MESH_RPR_SRV) && bt_mesh_is_provisioned()) {
 		atomic_set_bit(bt_mesh_prov_link.flags, REPROVISION);
@@ -705,16 +710,19 @@ static void prov_link_opened(void)
 	/* Stop other provisioning bearers for the duration of the prov link. */
 	if (IS_ENABLED(CONFIG_BT_MESH_PB_GATT) && is_pb_adv() &&
 	    (active_bearers & BT_MESH_PROV_GATT)) {
+		LOG_ERR("Cancelling pb_gatt");
 		bt_mesh_pb_gatt.link_cancel();
 	}
 
 	if (IS_ENABLED(CONFIG_BT_MESH_PB_ADV) && is_pb_gatt() &&
 	    (active_bearers & BT_MESH_PROV_ADV)) {
+		LOG_ERR("Cancelling pb_adv");
 		bt_mesh_pb_adv.link_cancel();
 	}
 
 	if (IS_ENABLED(CONFIG_BT_MESH_RPR_SRV) && !is_pb_remote() &&
 	    (active_bearers & BT_MESH_PROV_REMOTE)) {
+		LOG_ERR("Cancelling pb_remote");
 		pb_remote_srv.link_cancel();
 	}
 }

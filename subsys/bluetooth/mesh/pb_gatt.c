@@ -201,6 +201,7 @@ static int link_accept(const struct prov_bearer_cb *cb, void *cb_data)
 
 static void link_cancel(void)
 {
+	LOG_ERR("Provisioning over GATT link cancelled");
 	(void)bt_mesh_pb_gatt_srv_disable();
 }
 #endif

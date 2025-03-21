@@ -342,11 +342,20 @@ static void start_proxy_sol_or_proxy_adv(struct bt_mesh_ext_adv *ext_adv)
 		}
 	}
 
-	if (IS_ENABLED(CONFIG_BT_MESH_GATT_SERVER) &&
-	    !atomic_test_and_set_bit(ext_adv->flags, ADV_FLAG_PROXY)) {
-		if (bt_mesh_adv_gatt_send()) {
-			atomic_clear_bit(ext_adv->flags, ADV_FLAG_PROXY);
-			return;
+	LOG_ERR("Starting proxy advertising, %d", atomic_test_bit(ext_adv->flags, ADV_FLAG_PROXY));
+	if (IS_ENABLED(CONFIG_BT_MESH_GATT_SERVER)) {
+		if (atomic_test_bit(ext_adv->flags, ADV_FLAG_PROXY)) {
+			LOG_ERR("Stopping proxy adv");
+			stop_proxy_adv(ext_adv);
+		}
+
+		if (!atomic_test_and_set_bit(ext_adv->flags, ADV_FLAG_PROXY)) {
+			int err = bt_mesh_adv_gatt_send();
+			if (err) {
+				LOG_ERR("Failed to start GATT proxy advertising: %d", err);
+				atomic_clear_bit(ext_adv->flags, ADV_FLAG_PROXY);
+				return;
+			}
 		}
 	}
 }
@@ -371,7 +380,7 @@ static void send_pending_adv(struct k_work *work)
 	}
 
 	if (atomic_test_and_clear_bit(ext_adv->flags, ADV_FLAG_SENT)) {
-		LOG_DBG("Advertising stopped after %u ms for %s adv",
+		LOG_ERR("Advertising stopped after %u ms for %s adv",
 			k_uptime_get_32() - ext_adv->timestamp,
 			ext_adv->adv ? adv_tag_to_str[ext_adv->adv->ctx.tag]
 				     : adv_tag_to_str[BT_MESH_ADV_TAG_PROXY]);
@@ -392,6 +401,7 @@ static void send_pending_adv(struct k_work *work)
 
 	err = adv_queue_send_process(ext_adv);
 	if (!err) {
+		LOG_ERR("send pending adv: Advertising started");
 		return;
 	}
 
@@ -420,7 +430,8 @@ static bool schedule_send(struct bt_mesh_ext_adv *ext_adv)
 
 void bt_mesh_adv_gatt_update(void)
 {
-	(void)schedule_send(gatt_adv_get());
+	int err = schedule_send(gatt_adv_get());
+	LOG_ERR("GATT update: schedule_send returns: %d", err);
 }
 
 void bt_mesh_adv_local_ready(void)
@@ -636,7 +647,7 @@ int bt_mesh_adv_gatt_start(const struct bt_le_adv_param *param,
 		.timeout = (duration == SYS_FOREVER_MS) ? 0 : MAX(1, duration / 10),
 	};
 
-	LOG_DBG("Start advertising %d ms", duration);
+	LOG_ERR("Start advertising %d ms", duration);
 
 	atomic_set_bit(ext_adv->flags, ADV_FLAG_UPDATE_PARAMS);
 

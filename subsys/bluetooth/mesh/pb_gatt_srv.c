@@ -193,6 +193,7 @@ int bt_mesh_pb_gatt_srv_disable(void)
 	LOG_DBG("");
 
 	if (!service_registered) {
+		LOG_ERR("pb gatt srv disable: Not enabled");
 		return -EALREADY;
 	}
 
@@ -267,12 +268,14 @@ static int gatt_send(struct bt_conn *conn,
 		.func = end,
 	};
 
+	LOG_ERR("gatt_send");
+
 	return bt_gatt_notify_cb(conn, &params);
 }
 
 int bt_mesh_pb_gatt_srv_adv_start(void)
 {
-	LOG_DBG("");
+	LOG_ERR("");
 
 	if (!service_registered || bt_mesh_is_provisioned() ||
 	    !bt_mesh_proxy_has_avail_conn()) {

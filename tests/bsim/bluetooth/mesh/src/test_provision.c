@@ -275,6 +275,8 @@ static void test_terminate(void)
 	}
 }
 
+static uint64_t prov_started;
+
 static void unprovisioned_beacon(uint8_t uuid[16],
 				 bt_mesh_prov_oob_info_t oob_info,
 				 uint32_t *uri_hash)
@@ -287,11 +289,17 @@ static void unprovisioned_beacon(uint8_t uuid[16],
 		return;
 	}
 	bt_mesh_provision_adv(uuid, 0, prov_addr, 0);
+	prov_started = k_uptime_get();
 }
 
 static void unprovisioned_beacon_gatt(uint8_t uuid[16], bt_mesh_prov_oob_info_t oob_info)
 {
 	if (!atomic_test_bit(test_flags, IS_PROVISIONER)) {
+		return;
+	}
+
+	if (k_uptime_delta(&prov_started) > K_MSEC(100)) {
+		ASSERT(....)
 		return;
 	}
 
