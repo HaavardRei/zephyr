@@ -21,6 +21,7 @@
 #include <zephyr/bluetooth/addr.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/hci_vs.h>
+#include <zephyr/bluetooth/testing.h>
 #include <zephyr/kernel.h>
 #include <zephyr/net_buf.h>
 #include <zephyr/sys/__assert.h>
@@ -83,11 +84,20 @@ struct fragmented_advertiser {
 static struct fragmented_advertiser reassembling_advertiser;
 static struct k_work_delayable reassembly_timeout_work;
 
+#if defined(CONFIG_BT_TESTING)
+__weak void bt_testing_trace_ext_adv_reassembly_timeout(void) {}
+
+__weak void bt_testing_trace_ext_adv_reassembly_complete(void) {}
+#endif /* CONFIG_BT_TESTING */
+
 static void reassembly_timeout_handler(struct k_work *work)
 {
 	if (reassembling_advertiser.state == FRAG_ADV_REASSEMBLING) {
 		LOG_DBG("Ext adv reassembly timeout, discarding incomplete chain");
 		reassembling_advertiser.state = FRAG_ADV_DISCARDING;
+#if defined(CONFIG_BT_TESTING)
+		bt_testing_trace_ext_adv_reassembly_timeout();
+#endif
 	}
 }
 
@@ -964,6 +974,9 @@ void bt_hci_le_adv_ext_report(struct net_buf *buf)
 		__ASSERT_NO_MSG(is_report_complete);
 		create_ext_adv_info(evt, &scan_info);
 		le_adv_recv(&evt->addr, &scan_info, &ext_scan_buf, ext_scan_buf.len);
+#if defined(CONFIG_BT_TESTING)
+		bt_testing_trace_ext_adv_reassembly_complete();
+#endif
 
 		/* We do no longer need to keep track of this advertiser. */
 		reset_reassembling_advertiser();

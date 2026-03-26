@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Copyright 2024 Nordic Semiconductor ASA
+# Copyright 2026 Nordic Semiconductor ASA
 # SPDX-License-Identifier: Apache-2.0
+
+# Chain variant: peer sends ~1000 B of advertising data spanning multiple
+# AUX_CHAIN_IND PDUs, producing fragmented HCI ext adv reports.
+# Tests chain-aware discard logic and the host reassembly timer.
 
 source ${ZEPHYR_BASE}/tests/bsim/sh_common.source
 
 test_name="$(guess_test_long_name)"
 test_exe="${BSIM_OUT_PATH}/bin/bs_${BOARD_TS}_${test_name}_prj_conf"
 
-simulation_id=${test_name}
+simulation_id="${test_name}_chain"
 verbosity_level=2
 zephyr_log_level=3
 
@@ -18,7 +22,7 @@ Execute ./bs_2G4_phy_v1 -v=${verbosity_level} -s="${simulation_id}" \
 
 Execute "${test_exe}" \
     -v=${verbosity_level} -s="${simulation_id}" -d=1 \
-    -testid=peer -argstest log_level=${zephyr_log_level}
+    -testid=peer -argstest log_level=${zephyr_log_level} chain=1
 
 Execute "${test_exe}" \
     -v=${verbosity_level} -s="${simulation_id}" -d=0 \
