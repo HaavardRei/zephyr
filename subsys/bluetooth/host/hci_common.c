@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include <zephyr/bluetooth/buf.h>
 #include <zephyr/bluetooth/hci_types.h>
@@ -13,6 +14,9 @@
 #include <zephyr/kernel.h>
 #include <zephyr/net_buf.h>
 #include <zephyr/sys/byteorder.h>
+
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(bt_hci_common, CONFIG_BT_HCI_DRIVER_LOG_LEVEL);
 
 #include "common/assert.h"
 
@@ -80,3 +84,101 @@ struct net_buf *bt_hci_cmd_status_create(uint16_t op, uint8_t status)
 
 	return buf;
 }
+
+#if defined(CONFIG_BT_EXT_ADV)
+struct discarded_ext_adv_chain {
+	bt_addr_le_t addr;
+	uint8_t sid;
+	bool active;
+};
+
+static struct discarded_ext_adv_chain discarded_chain;
+
+static struct discarded_ext_adv_chain *find_discarded_chain(const bt_addr_le_t *addr, uint8_t sid)
+{
+	if (discarded_chain.active && discarded_chain.sid == sid &&
+	    bt_addr_le_eq(&discarded_chain.addr, addr)) {
+		return &discarded_chain;
+	}
+	return NULL;
+}
+
+static struct discarded_ext_adv_chain *alloc_discarded_chain(const bt_addr_le_t *addr, uint8_t sid)
+{
+	if (!discarded_chain.active) {
+		bt_addr_le_copy(&discarded_chain.addr, addr);
+		discarded_chain.sid = sid;
+		discarded_chain.active = true;
+		return &discarded_chain;
+	}
+	return NULL;
+}
+
+bool bt_hci_ext_adv_report_process(bt_hci_recv_t recv, const struct device *dev,
+				   const uint8_t *data, size_t len)
+{
+	struct bt_hci_evt_hdr hdr;
+	const struct bt_hci_evt_le_ext_advertising_report *report;
+	const struct bt_hci_evt_le_ext_advertising_info *info;
+	uint16_t evt_type;
+	uint16_t data_status;
+	struct discarded_ext_adv_chain *chain;
+	struct net_buf *buf;
+	size_t buf_tailroom;
+
+	if (len < sizeof(hdr) + sizeof(struct bt_hci_evt_le_meta_event)) {
+		return false;
+	}
+
+	memcpy(&hdr, data, sizeof(hdr));
+
+	if (hdr.evt != BT_HCI_EVT_LE_META_EVENT) {
+		return false;
+	}
+
+	if (data[sizeof(hdr)] != BT_HCI_EVT_LE_EXT_ADVERTISING_REPORT) {
+		return false;
+	}
+
+	report = (const void *)&data[sizeof(hdr) + sizeof(struct bt_hci_evt_le_meta_event)];
+	info = report->adv_info;
+	evt_type = sys_le16_to_cpu(info->evt_type);
+	data_status = BT_HCI_LE_ADV_EVT_TYPE_DATA_STATUS(evt_type);
+
+	chain = find_discarded_chain(&info->addr, info->sid);
+	if (chain) {
+		if (data_status != BT_HCI_LE_ADV_EVT_TYPE_DATA_STATUS_PARTIAL) {
+			LOG_DBG("Discarding of tracked ext adv chain completed");
+			chain->active = false;
+		}
+		LOG_DBG("Discarding tracked ext adv chain fragment");
+		return true;
+	}
+
+	buf = bt_buf_get_evt(hdr.evt, true, K_NO_WAIT);
+	if (!buf) {
+		if (data_status == BT_HCI_LE_ADV_EVT_TYPE_DATA_STATUS_PARTIAL) {
+			LOG_DBG("Allocating new discarded chain");
+			chain = alloc_discarded_chain(&info->addr, info->sid);
+			if (!chain) {
+				LOG_ERR("Failed to allocate new discarded chain");
+			}
+		}
+		LOG_DBG("Discarding ext adv report");
+		return true;
+	}
+
+	buf_tailroom = net_buf_tailroom(buf);
+	if (buf_tailroom < len) {
+		LOG_ERR("Not enough space in buffer %zu/%zu", len, buf_tailroom);
+		net_buf_unref(buf);
+		return true;
+	}
+
+	net_buf_add_mem(buf, &hdr, sizeof(hdr));
+	net_buf_add_mem(buf, data + sizeof(hdr), len - sizeof(hdr));
+
+	recv(dev, buf);
+	return true;
+}
+#endif /* CONFIG_BT_EXT_ADV */

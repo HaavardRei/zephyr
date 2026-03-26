@@ -68,6 +68,7 @@ static struct scanner_state scan_state;
 #if defined(CONFIG_BT_EXT_ADV)
 /* A buffer used to reassemble advertisement data from the controller. */
 NET_BUF_SIMPLE_DEFINE(ext_scan_buf, CONFIG_BT_EXT_SCAN_BUF_SIZE);
+#define REASSEMBLY_TIMEOUT K_MSEC(CONFIG_BT_EXT_ADV_REASSEMBLY_TIMEOUT)
 
 struct fragmented_advertiser {
 	bt_addr_le_t addr;
@@ -80,6 +81,15 @@ struct fragmented_advertiser {
 };
 
 static struct fragmented_advertiser reassembling_advertiser;
+static struct k_work_delayable reassembly_timeout_work;
+
+static void reassembly_timeout_handler(struct k_work *work)
+{
+	if (reassembling_advertiser.state == FRAG_ADV_REASSEMBLING) {
+		LOG_DBG("Ext adv reassembly timeout, discarding incomplete chain");
+		reassembling_advertiser.state = FRAG_ADV_DISCARDING;
+	}
+}
 
 static bool fragmented_advertisers_equal(const struct fragmented_advertiser *a,
 					 const bt_addr_le_t *addr, uint8_t sid)
@@ -94,10 +104,12 @@ static void init_reassembling_advertiser(const bt_addr_le_t *addr, uint8_t sid)
 	bt_addr_le_copy(&reassembling_advertiser.addr, addr);
 	reassembling_advertiser.sid = sid;
 	reassembling_advertiser.state = FRAG_ADV_REASSEMBLING;
+	k_work_reschedule(&reassembly_timeout_work, REASSEMBLY_TIMEOUT);
 }
 
 static void reset_reassembling_advertiser(void)
 {
+	(void)k_work_cancel_delayable(&reassembly_timeout_work);
 	net_buf_simple_reset(&ext_scan_buf);
 	reassembling_advertiser.state = FRAG_ADV_INACTIVE;
 }
@@ -122,6 +134,9 @@ void bt_scan_reset(void)
 	memset(&scan_state, 0x0, sizeof(scan_state));
 	k_mutex_init(&scan_state.scan_update_mutex);
 	k_mutex_init(&scan_state.scan_explicit_params_mutex);
+#if defined(CONFIG_BT_EXT_ADV)
+	k_work_init_delayable(&reassembly_timeout_work, reassembly_timeout_handler);
+#endif
 	bt_scan_softreset();
 }
 
@@ -911,6 +926,10 @@ void bt_hci_le_adv_ext_report(struct net_buf *buf)
 			 * this is the first report from the new advertiser.
 			 * Initialize the new advertiser.
 			 */
+			if (reassembling_advertiser.state == FRAG_ADV_DISCARDING) {
+				/* Previous chain was abandoned (reassembly timeout). */
+				reset_reassembling_advertiser();
+			}
 			__ASSERT_NO_MSG(reassembling_advertiser.state == FRAG_ADV_INACTIVE);
 			init_reassembling_advertiser(&evt->addr, evt->sid);
 		}
@@ -935,6 +954,7 @@ void bt_hci_le_adv_ext_report(struct net_buf *buf)
 		net_buf_simple_add_mem(&ext_scan_buf, buf->data, evt->length);
 		if (more_to_come) {
 			/* The controller will send additional reports to be reassembled */
+			k_work_reschedule(&reassembly_timeout_work, REASSEMBLY_TIMEOUT);
 			continue;
 		}
 

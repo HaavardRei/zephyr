@@ -236,6 +236,11 @@ static void bt_ipc_rx(const struct device *dev, const uint8_t *data, size_t len)
 
 	switch (pkt_indicator) {
 	case BT_HCI_H4_EVT:
+#if defined(CONFIG_BT_EXT_ADV)
+		if (bt_hci_ext_adv_report_process(ipc->recv, dev, data, remaining)) {
+			return;
+		}
+#endif
 		buf = bt_ipc_evt_recv(data, remaining);
 		break;
 

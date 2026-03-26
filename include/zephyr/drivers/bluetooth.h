@@ -329,6 +329,27 @@ struct net_buf *bt_hci_cmd_complete_create(uint16_t op, uint8_t plen);
  */
 struct net_buf *bt_hci_cmd_status_create(uint16_t op, uint8_t status);
 
+/** Process an HCI event that may be an LE Extended Advertising Report.
+ *
+ * Performs chain-aware discard handling of ext adv reports. When a
+ * fragment of a chained report cannot be buffered, the remaining fragments
+ * are tracked and silently dropped.
+ *
+ * HCI transport drivers should call this before their normal event
+ * processing path.  If the function returns @c true the event has been
+ * fully handled and the driver shall not process it further.
+ *
+ * @param recv  Host receive callback registered during HCI open.
+ * @param dev   HCI device that received the event.
+ * @param data  Raw HCI event starting at the event header.
+ * @param len   Length of @p data in bytes.
+ *
+ * @retval true  Event was an ext adv report and has been handled.
+ * @retval false Event is not an ext adv report; continue normal handling.
+ */
+bool bt_hci_ext_adv_report_process(bt_hci_recv_t recv, const struct device *dev,
+				   const uint8_t *data, size_t len);
+
 #ifdef __cplusplus
 }
 #endif
